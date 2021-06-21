@@ -44,6 +44,10 @@ NodeOptions CreateNodeOptions(
     options.use_pose_extrapolator =
         lua_parameter_dictionary->GetBool("use_pose_extrapolator");
   }
+  if (lua_parameter_dictionary->HasKey("publish_odometry")) {
+    options.publish_odometry =
+        lua_parameter_dictionary->GetBool("publish_odometry");
+  }
   return options;
 }
 

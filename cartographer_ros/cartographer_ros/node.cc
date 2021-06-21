@@ -113,6 +113,9 @@ Node::Node(
   constraint_list_publisher_ =
       node_handle_.advertise<::visualization_msgs::MarkerArray>(
           kConstraintListTopic, kLatestOnlyPublisherQueueSize);
+  odometry_publisher_ =
+      node_handle_.advertise<::nav_msgs::Odometry>(
+          kOdometryTopic, 1);
   service_servers_.push_back(node_handle_.advertiseService(
       kSubmapQueryServiceName, &Node::HandleSubmapQuery, this));
   service_servers_.push_back(node_handle_.advertiseService(
@@ -290,6 +293,17 @@ void Node::PublishLocalTrajectoryData(const ::ros::TimerEvent& timer_event) {
         stamped_transforms.push_back(stamped_transform);
 
         tf_broadcaster_.sendTransform(stamped_transforms);
+
+        if (node_options_.publish_odometry) {
+            nav_msgs::Odometry o;
+            o.header.frame_id = trajectory_data.trajectory_options.odom_frame;
+            o.child_frame_id = trajectory_data.trajectory_options.published_frame;
+            o.pose.pose.position.x = stamped_transform.transform.translation.x;
+            o.pose.pose.position.y = stamped_transform.transform.translation.y;
+            o.pose.pose.position.z = stamped_transform.transform.translation.z;
+            o.pose.pose.orientation = stamped_transform.transform.rotation;
+            odometry_publisher_.publish(o);
+        }
       } else {
         stamped_transform.header.frame_id = node_options_.map_frame;
         stamped_transform.child_frame_id =
@@ -297,6 +311,17 @@ void Node::PublishLocalTrajectoryData(const ::ros::TimerEvent& timer_event) {
         stamped_transform.transform = ToGeometryMsgTransform(
             tracking_to_map * (*trajectory_data.published_to_tracking));
         tf_broadcaster_.sendTransform(stamped_transform);
+
+        if (node_options_.publish_odometry) {
+            nav_msgs::Odometry o;
+            o.header.frame_id = node_options_.map_frame;
+            o.child_frame_id = trajectory_data.trajectory_options.published_frame;
+            o.pose.pose.position.x = stamped_transform.transform.translation.x;
+            o.pose.pose.position.y = stamped_transform.transform.translation.y;
+            o.pose.pose.position.z = stamped_transform.transform.translation.z;
+            o.pose.pose.orientation = stamped_transform.transform.rotation;
+            odometry_publisher_.publish(o);
+        }
       }
     }
   }
