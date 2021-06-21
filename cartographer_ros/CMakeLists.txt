@@ -15,6 +15,7 @@
 cmake_minimum_required(VERSION 2.8.12)  # Ships with Ubuntu 14.04 (Trusty)
 
 project(cartographer_ros)
+set(CMAKE_BUILD_TYPE "RelWithDebInfo")
 
 set(PACKAGE_DEPENDENCIES
   cartographer_ros_msgs
