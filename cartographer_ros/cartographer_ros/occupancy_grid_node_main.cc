@@ -68,11 +68,13 @@ class Node {
 
   ::ros::NodeHandle node_handle_;
   const double resolution_;
+  bool published_once_ = false;
 
   absl::Mutex mutex_;
   ::ros::ServiceClient client_ GUARDED_BY(mutex_);
   ::ros::Subscriber submap_list_subscriber_ GUARDED_BY(mutex_);
   ::ros::Publisher occupancy_grid_publisher_ GUARDED_BY(mutex_);
+  ::ros::Publisher occupancy_grid_publisher_once_ GUARDED_BY(mutex_);
   std::map<SubmapId, SubmapSlice> submap_slices_ GUARDED_BY(mutex_);
   ::ros::WallTimer occupancy_grid_publisher_timer_;
   std::string last_frame_id_;
@@ -93,6 +95,10 @@ Node::Node(const double resolution, const double publish_period_sec)
       occupancy_grid_publisher_(
           node_handle_.advertise<::nav_msgs::OccupancyGrid>(
               FLAGS_occupancy_grid_topic, kLatestOnlyPublisherQueueSize,
+              true /* latched */)),
+      occupancy_grid_publisher_once_(
+          node_handle_.advertise<::nav_msgs::OccupancyGrid>(
+              "/map_static", kLatestOnlyPublisherQueueSize,
               true /* latched */)),
       occupancy_grid_publisher_timer_(
           node_handle_.createWallTimer(::ros::WallDuration(publish_period_sec),
@@ -169,6 +175,10 @@ void Node::DrawAndPublish(const ::ros::WallTimerEvent& unused_timer_event) {
   std::unique_ptr<nav_msgs::OccupancyGrid> msg_ptr = CreateOccupancyGridMsg(
       painted_slices, resolution_, last_frame_id_, last_timestamp_);
   occupancy_grid_publisher_.publish(*msg_ptr);
+  if (!published_once_) {
+      occupancy_grid_publisher_once_.publish(*msg_ptr);
+      published_once_ = true;
+  }
 }
 
 }  // namespace
