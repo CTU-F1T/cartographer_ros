@@ -296,6 +296,7 @@ void Node::PublishLocalTrajectoryData(const ::ros::TimerEvent& timer_event) {
 
         if (node_options_.publish_odometry) {
             nav_msgs::Odometry o;
+            o.header.stamp = stamped_transform.header.stamp;
             o.header.frame_id = trajectory_data.trajectory_options.odom_frame;
             o.child_frame_id = trajectory_data.trajectory_options.published_frame;
             o.pose.pose.position.x = stamped_transform.transform.translation.x;
@@ -314,6 +315,7 @@ void Node::PublishLocalTrajectoryData(const ::ros::TimerEvent& timer_event) {
 
         if (node_options_.publish_odometry) {
             nav_msgs::Odometry o;
+            o.header.stamp = stamped_transform.header.stamp;
             o.header.frame_id = node_options_.map_frame;
             o.child_frame_id = trajectory_data.trajectory_options.published_frame;
             o.pose.pose.position.x = stamped_transform.transform.translation.x;
