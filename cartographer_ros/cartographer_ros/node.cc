@@ -19,6 +19,7 @@
 #include <chrono>
 #include <string>
 #include <vector>
+#include <fstream>
 
 #include "Eigen/Core"
 #include "absl/memory/memory.h"
@@ -65,12 +66,12 @@ template <typename MessageType>
     const int trajectory_id, const std::string& topic,
     ::ros::NodeHandle* const node_handle, Node* const node) {
   return node_handle->subscribe<MessageType>(
-      topic, kInfiniteSubscriberQueueSize,
+      topic, kLatestOnlyPublisherQueueSize, //kInfiniteSubscriberQueueSize, // kLatestOnlyPublisherQueueSize
       boost::function<void(const typename MessageType::ConstPtr&)>(
           [node, handler, trajectory_id,
            topic](const typename MessageType::ConstPtr& msg) {
             (node->*handler)(trajectory_id, topic, msg);
-          }));
+          }), NULL, ::ros::TransportHints().tcpNoDelay());
 }
 
 std::string TrajectoryStateToString(const TrajectoryState trajectory_state) {
@@ -89,6 +90,72 @@ std::string TrajectoryStateToString(const TrajectoryState trajectory_state) {
 
 }  // namespace
 
+// TimeMeasurer
+class TimeMeasurer {
+    private:
+        std::string _name = "";
+        std::string _unit = "";
+        std::chrono::time_point<std::chrono::high_resolution_clock> _start;
+        int _count = 0;
+        double _sum = 0;
+        double _max = 0;
+        double _last = 0;
+
+        void updateStatistics() {
+            this->_count++;
+            this->_sum += this->_last;
+            this->_max = this->_last > this->_max ? this->_last : this->_max;
+        }
+
+    public:
+        TimeMeasurer() {
+            this->_name = "TimeMeasurer";
+            this->_unit = "s";
+        };
+
+        TimeMeasurer(std::string name) {
+            this->_name = name;
+            this->_unit = "s";
+        };
+
+        TimeMeasurer(std::string name, std::string unit) {
+            this->_name = name;
+            this->_unit = unit;
+        };
+
+        ~TimeMeasurer(){};
+
+        void start() {
+            this->_start = std::chrono::high_resolution_clock::now();
+        }
+
+        void end() {
+            if (this->_unit == "s") {
+                this->_last = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::high_resolution_clock::now() - this->_start).count();
+            } else if (this->_unit == "ms") {
+                this->_last = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now() - this->_start).count();
+            } else if (this->_unit == "us") {
+                this->_last = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now() - this->_start).count();
+            } else if (this->_unit == "ns") {
+                this->_last = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now() - this->_start).count();
+            } else {
+                this->_last = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::high_resolution_clock::now() - this->_start).count();
+            }
+
+            this->updateStatistics();
+        }
+
+        friend std::ostream& operator<< (std::ostream& os, const TimeMeasurer& tm) {
+            //os << boost::format("%s: cur=%.4f%s avg=%.4f%s max=%.4f%s" % tm._name % tm._last % tm->_unit % (tm->_sum / tm->_count) % tm->_unit % tm->_max % tm->_unit;
+            if (tm._count > 0) {
+                os << tm._name << ": cur=" << tm._last << tm._unit << " avg=" << (tm._sum / tm._count) << tm._unit << " max=" << tm._max << tm._unit;
+            } else {
+                os << tm._name << ": cur=" << tm._last << tm._unit << " avg=NONE" << " max=" << tm._max << tm._unit;
+            }
+            return os;
+        }
+};
+
 Node::Node(
     const NodeOptions& node_options,
     std::unique_ptr<cartographer::mapping::MapBuilderInterface> map_builder,
@@ -96,6 +163,8 @@ Node::Node(
     : node_options_(node_options),
       map_builder_bridge_(node_options_, std::move(map_builder), tf_buffer) {
   absl::MutexLock lock(&mutex_);
+  gpio_state = false;
+  gpio_state2 = false;
   if (collect_metrics) {
     metrics_registry_ = absl::make_unique<metrics::FamilyFactory>();
     carto::metrics::RegisterAllMetrics(metrics_registry_.get());
@@ -135,23 +204,30 @@ Node::Node(
       node_handle_.advertise<sensor_msgs::PointCloud2>(
           kScanMatchedPointCloudTopic, kLatestOnlyPublisherQueueSize);
 
-  wall_timers_.push_back(node_handle_.createWallTimer(
-      ::ros::WallDuration(node_options_.submap_publish_period_sec),
-      &Node::PublishSubmapList, this));
+  if (node_options_.submap_publish_period_sec > 0) {
+    wall_timers_.push_back(node_handle_.createWallTimer(
+        ::ros::WallDuration(node_options_.submap_publish_period_sec),
+        &Node::PublishSubmapList, this));
+  }
   if (node_options_.pose_publish_period_sec > 0) {
     publish_local_trajectory_data_timer_ = node_handle_.createTimer(
         ::ros::Duration(node_options_.pose_publish_period_sec),
         &Node::PublishLocalTrajectoryData, this);
   }
-  wall_timers_.push_back(node_handle_.createWallTimer(
-      ::ros::WallDuration(node_options_.trajectory_publish_period_sec),
-      &Node::PublishTrajectoryNodeList, this));
-  wall_timers_.push_back(node_handle_.createWallTimer(
-      ::ros::WallDuration(node_options_.trajectory_publish_period_sec),
-      &Node::PublishLandmarkPosesList, this));
-  wall_timers_.push_back(node_handle_.createWallTimer(
-      ::ros::WallDuration(kConstraintPublishPeriodSec),
-      &Node::PublishConstraintList, this));
+  if (node_options_.trajectory_publish_period_sec > 0) {
+    wall_timers_.push_back(node_handle_.createWallTimer(
+        ::ros::WallDuration(node_options_.trajectory_publish_period_sec),
+        &Node::PublishTrajectoryNodeList, this));
+    wall_timers_.push_back(node_handle_.createWallTimer(
+        ::ros::WallDuration(node_options_.trajectory_publish_period_sec),
+        &Node::PublishLandmarkPosesList, this));
+    wall_timers_.push_back(node_handle_.createWallTimer(
+        ::ros::WallDuration(kConstraintPublishPeriodSec),
+        &Node::PublishConstraintList, this));
+  }
+  /*print_summary_timer_ = node_handle_.createTimer(
+      ::ros::Duration(5),
+      &Node::printSummary, this);*/
 }
 
 Node::~Node() { FinishAllTrajectories(); }
@@ -216,8 +292,13 @@ void Node::AddSensorSamplers(const int trajectory_id,
           options.landmarks_sampling_ratio));
 }
 
+TimeMeasurer tm_localtrajectorylock("local_trajectory_lock", "us");
+TimeMeasurer tm_localtrajectory("local_trajectory", "us");
 void Node::PublishLocalTrajectoryData(const ::ros::TimerEvent& timer_event) {
+  tm_localtrajectory.start();
+  tm_localtrajectorylock.start();
   absl::MutexLock lock(&mutex_);
+  tm_localtrajectorylock.end();
   for (const auto& entry : map_builder_bridge_.GetLocalTrajectoryData()) {
     const auto& trajectory_data = entry.second;
 
@@ -274,6 +355,15 @@ void Node::PublishLocalTrajectoryData(const ::ros::TimerEvent& timer_event) {
         trajectory_data.local_to_map * tracking_to_local;
 
     if (trajectory_data.published_to_tracking != nullptr) {
+      /*gpio_state2 = !gpio_state2;
+      std::ofstream file;
+      file.open("/sys/class/gpio/gpio480/value");
+      if (gpio_state) {
+        file << "1";
+      } else {
+        file << "0";
+      }
+      file.close();*/
       if (trajectory_data.trajectory_options.provide_odom_frame) {
         std::vector<geometry_msgs::TransformStamped> stamped_transforms;
 
@@ -327,6 +417,7 @@ void Node::PublishLocalTrajectoryData(const ::ros::TimerEvent& timer_event) {
       }
     }
   }
+  tm_localtrajectory.end();
 }
 
 void Node::PublishTrajectoryNodeList(
@@ -824,6 +915,15 @@ void Node::HandleLaserScanMessage(const int trajectory_id,
   if (!sensor_samplers_.at(trajectory_id).rangefinder_sampler.Pulse()) {
     return;
   }
+  /*gpio_state = !gpio_state;
+  std::ofstream file;
+  file.open("/sys/class/gpio/gpio298/value");
+  if (gpio_state) {
+    file << "1";
+  } else {
+    file << "0";
+  }
+  file.close();*/
   map_builder_bridge_.sensor_bridge(trajectory_id)
       ->HandleLaserScanMessage(sensor_id, msg);
 }
@@ -893,6 +993,11 @@ void Node::MaybeWarnAboutTopicMismatch(
     LOG(WARNING) << "Currently available topics are: "
                  << published_topics_string.str();
   }
+}
+
+void Node::printSummary(const ::ros::TimerEvent&) {
+  std::cout << tm_localtrajectorylock << std::endl;
+  std::cout << tm_localtrajectory << std::endl;
 }
 
 }  // namespace cartographer_ros

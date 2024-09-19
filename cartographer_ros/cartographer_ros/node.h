@@ -116,6 +116,8 @@ class Node {
   // Loads a serialized SLAM state from a .pbstream file.
   void LoadState(const std::string& state_filename, bool load_frozen_state);
 
+  void printSummary(const ::ros::TimerEvent&);
+
   ::ros::NodeHandle* node_handle();
 
  private:
@@ -228,6 +230,9 @@ class Node {
   // simulation time is standing still. This prevents overflowing the transform
   // listener buffer by publishing the same transforms over and over again.
   ::ros::Timer publish_local_trajectory_data_timer_;
+  ::ros::Timer print_summary_timer_;
+  bool gpio_state;
+  bool gpio_state2;
 };
 
 }  // namespace cartographer_ros
